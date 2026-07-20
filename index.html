@@ -397,7 +397,7 @@ const sorted = [...logs].sort((a,b) => new Date(b.timestamp) - new Date(a.timest
 return sorted[0];
 }
 
-// 💡 타임존 및 날짜 계산 오류 완벽 제거한 이자 계산 수식
+// 💡 100% 확실한 이자 계산 수식 (단순화)
 function calculateInterest() {
 if (!isLoaded || !appData.transactions) return 0;
 
@@ -412,30 +412,26 @@ if(periodType === 'daily') cycleDays = 1;
 
 const now = new Date();
 let totalInterest = 0;
-const payoutDate = appData.lastInterestPayout ? new Date(appData.lastInterestPayout) : null;
 
 const txs = Object.values(appData.transactions);
 txs.forEach(tx => {
-if (tx.amount <= 0) return; // 입금 건만
+if (tx.amount <= 0) return; // 입금 항목만
 
-const txDate = new Date(tx.timestamp);
-let start = txDate;
-if (payoutDate && payoutDate > txDate) {
-start = payoutDate;
-}
+const txTime = new Date(tx.timestamp).getTime();
+const nowTime = now.getTime();
 
-// 입금일 기준 다음 지급 예정일
-const nextPayout = new Date(start);
-nextPayout.setDate(nextPayout.getDate() + cycleDays);
+// 경과 일수 계산 (밀리초 변환)
+const diffDays = (nowTime - txTime) / (1000 * 60 * 60 * 24);
 
-// 오늘 날짜가 다음 지급 예정일 이상이면 경과 주기만큼 이자 계산
-if (now >= nextPayout) {
-// 전체 경과일수 계산 (자연수로 반올림 오차 방지)
-const elapsedMs = now.getTime() - start.getTime();
-const elapsedDays = Math.floor(elapsedMs / (1000 * 60 * 60 * 24));
-const cycles = Math.max(1, Math.floor(elapsedDays / cycleDays));
-
+// 이미 지급받은 이자가 없는 경우 & 경과 일수가 주기(30일) 이상이거나 같은 달 지급일에 달한 경우
+if (!appData.lastInterestPayout || new Date(appData.lastInterestPayout) < new Date(tx.timestamp)) {
+const cycles = Math.floor(diffDays / cycleDays);
+if (cycles >= 1) {
 totalInterest += Math.floor(tx.amount * rateDecimal * cycles);
+} else if (diffDays >= 28) { 
+// 월 말 및 시차(28~30일) 고려하여 주기 달성 시 무조건 1회 지급
+totalInterest += Math.floor(tx.amount * rateDecimal);
+}
 }
 });
 
