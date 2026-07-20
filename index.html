@@ -106,10 +106,10 @@ transform: rotate(-7deg) scale(0.94);
 </button>
 </div>
 
-<!-- 입금별 예상 이자 배너 -->
+<!-- 입금별 예상 이자 배너 (지급 예정일 포함) -->
 <div class="mt-4 pt-3 border-t border-dashed border-line">
 <div class="flex justify-between items-center mb-2">
-<span class="text-[11px] text-ink2 font-bold">입금별 예상 이자</span>
+<span class="text-[11px] text-ink2 font-bold">입금별 예상 이자 & 지급 예정일</span>
 <div class="flex items-center space-x-1">
 <button onclick="prevPage('interest')" id="prev-interest-btn" class="px-2 py-0.5 bg-paper text-[10px] font-bold rounded border border-line text-ink2 hover:bg-line/40 disabled:opacity-40">이전</button>
 <span id="interest-page-indicator" class="text-[10px] text-ink2 font-semibold px-1">1/1</span>
@@ -298,13 +298,12 @@ transform: rotate(-7deg) scale(0.94);
 
 </div>
 
-<!-- Firebase REST API 기반 로직 (SDK 미사용, 순수 fetch) -->
+<!-- Firebase REST API 기반 로직 -->
 <script>
 const DB_URL = "https://family-bank-93e76-default-rtdb.asia-southeast1.firebasedatabase.app";
 
 function setStatus(state, msg) {
 const statusEl = document.getElementById('connection-status');
-const statusText = document.getElementById('status-text');
 if (!statusEl) return;
 if (state === 'connected') {
 statusEl.className = "flex items-center space-x-1.5 bg-mint/10 px-2.5 py-1 rounded-full text-xs";
@@ -323,7 +322,7 @@ console.error("전역 스크립트 에러:", e.message, e);
 setStatus('error', '스크립트 오류: ' + e.message);
 });
 
-// ---- REST API 헬퍼 함수들 (Firebase SDK 대체) ----
+// REST API 헬퍼 함수
 function dbSet(path, data) {
 return fetch(`${DB_URL}/${path}.json`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) })
 .then(r => { if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
@@ -341,7 +340,6 @@ return fetch(`${DB_URL}/${path}.json`, { method: 'DELETE' })
 .then(r => { if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
 }
 
-// 초기 안전 데이터 구조 정의
 let appData = {
 transactions: {},
 rateLog: {},
@@ -349,18 +347,14 @@ pin: "",
 lastInterestPayout: null
 };
 
-let isLoaded = false; // 최초 로드 여부 플래그
-let curPageHistory = 1;
-const limitHistory = 5;
-let curPageRate = 1;
-const limitRate = 5;
-let curPageInterest = 1;
-const limitInterest = 3;
+let isLoaded = false;
+let curPageHistory = 1; const limitHistory = 5;
+let curPageRate = 1; const limitRate = 5;
+let curPageInterest = 1; const limitInterest = 3;
 
 let selectedTxKey = null;
 let currentTxType = 'deposit';
 
-// [최우선] 데이터 로드 (REST GET, 3초마다 폴링하여 준실시간 동기화)
 function loadData() {
 fetch(`${DB_URL}/familyBank.json`)
 .then(r => { if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
@@ -392,7 +386,6 @@ function formatKRW(val) {
 return new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(val).replace('₩', '') + '원';
 }
 
-// 최신 금리 설정을 찾아오는 함수 (에러 안전 조치)
 function getLatestRateConfig() {
 if (!appData || !appData.rateLog) {
 return { rate: 5, period: 'monthly', type: 'simple', timestamp: new Date().toISOString() };
@@ -405,7 +398,7 @@ const sorted = [...logs].sort((a,b) => new Date(b.timestamp) - new Date(a.timest
 return sorted[0];
 }
 
-// 일 단위(자정 기준) 이자 연산 - 매일 00시에 하루치가 가산됨
+// 실제 오늘 시점까지 쌓인 누적 이자 계산
 function calculateInterest() {
 if (!isLoaded || !appData.transactions) return 0;
 
@@ -421,18 +414,15 @@ const now = new Date();
 const nowDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 let totalAccumulated = 0;
 
-// 마지막 지급 기준일 (이미 지급된 이자는 그 시점부터 다시 계산되지 않도록 제외)
 const payoutDate = appData.lastInterestPayout ? new Date(appData.lastInterestPayout) : null;
 
 const txs = Object.values(appData.transactions);
 txs.forEach(tx => {
+if (tx.amount <= 0) return; // 입금 건만 이자 계산
 const txDate = new Date(tx.timestamp);
 if (txDate >= now) return;
 
-// 이 입금이 마지막 지급일보다 이전이면, 계산 시작점을 지급일로 당겨온다
 const effectiveStart = (payoutDate && payoutDate > txDate) ? payoutDate : txDate;
-
-// 자정 기준으로 날짜만 비교 (예: 오늘 입금 시 오늘은 0일, 내일 00시부터 1일)
 const txDateOnly = new Date(effectiveStart.getFullYear(), effectiveStart.getMonth(), effectiveStart.getDate());
 const diffDays = Math.floor((nowDateOnly - txDateOnly) / (1000 * 60 * 60 * 24));
 if (diffDays <= 0) return;
@@ -444,44 +434,47 @@ totalAccumulated += interestEarned;
 return Math.max(0, Math.floor(totalAccumulated));
 }
 
-// 통합 UI 렌더링 함수
 function renderAll() {
-if (!isLoaded) return; // 로딩 전 렌더링에 의한 크래시 방지
+if (!isLoaded) return;
 
-// 잔액 계산
 const txs = Object.values(appData.transactions);
 const balance = txs.reduce((acc, tx) => acc + tx.amount, 0);
 document.getElementById('balance-display').innerText = formatKRW(balance);
 
-// 현재 금리 텍스트 표시
 const curRate = getLatestRateConfig();
 const periodTxt = curRate.period === 'monthly' ? '월간' : curRate.period === 'weekly' ? '주간' : '일일';
 document.getElementById('rate-display').innerText = `${periodTxt} ${curRate.rate}% · 단리`;
 
-// 이자 액수
 const calculated = calculateInterest();
 document.getElementById('accumulated-interest').innerText = `+${formatKRW(calculated)}`;
 
-// 입금별 예상 이자 리스트 페이징 및 출력 (3줄씩, 나머지는 페이지네이션)
+// 🌟 [개선] 입금별 예상 이자 & 지급 예정일 출력
 const activeRateBD = getLatestRateConfig();
 const rateDecimalBD = parseFloat(activeRateBD.rate) / 100;
-let divisorBD = 30;
-if(activeRateBD.period === 'weekly') divisorBD = 7;
-if(activeRateBD.period === 'daily') divisorBD = 1;
+let cycleDays = 30; // 기본 월간
+if(activeRateBD.period === 'weekly') cycleDays = 7;
+if(activeRateBD.period === 'daily') cycleDays = 1;
 
 const nowBD = new Date();
-const nowDateOnlyBD = new Date(nowBD.getFullYear(), nowBD.getMonth(), nowBD.getDate());
-const payoutDateBD = appData.lastInterestPayout ? new Date(appData.lastInterestPayout) : null;
 
 const depositArray = txs
 .filter(tx => tx.amount > 0)
 .map(tx => {
 const txDate = new Date(tx.timestamp);
-const effectiveStart = (payoutDateBD && payoutDateBD > txDate) ? payoutDateBD : txDate;
-const txDateOnly = new Date(effectiveStart.getFullYear(), effectiveStart.getMonth(), effectiveStart.getDate());
-const diffDays = Math.floor((nowDateOnlyBD - txDateOnly) / (1000 * 60 * 60 * 24));
-const earned = diffDays > 0 ? Math.floor(tx.amount * rateDecimalBD * (diffDays / divisorBD)) : 0;
-return { amount: tx.amount, memo: tx.memo, txDate, earned };
+
+// 1주기(30일/7일/1일) 완성 시 지급되는 '1회 예상 이자'
+const expectedCycleInterest = Math.floor(tx.amount * rateDecimalBD);
+
+// 다음 이자 지급 예정일 계산 (입금일 + 주깃일)
+const nextPayoutDate = new Date(txDate);
+nextPayoutDate.setDate(nextPayoutDate.getDate() + cycleDays);
+
+// 남아있는 일수 (D-Day)
+const diffTime = nextPayoutDate - nowBD;
+const dDay = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+const dDayStr = dDay > 0 ? `D-${dDay}` : '지급일 도달';
+
+return { amount: tx.amount, memo: tx.memo, txDate, expectedCycleInterest, nextPayoutDate, dDayStr };
 })
 .sort((a,b) => b.txDate - a.txDate);
 
@@ -502,14 +495,23 @@ interestListEl.innerHTML = `<div class="text-center py-3 text-[11px] text-ink2/6
 } else {
 slicedDeposits.forEach(d => {
 const dateStr = d.txDate.toLocaleDateString('ko-KR', {month:'short', day:'numeric'});
+const targetDateStr = d.nextPayoutDate.toLocaleDateString('ko-KR', {month:'short', day:'numeric'});
 const row = document.createElement('div');
 row.className = "flex justify-between items-center text-[11px] bg-paper rounded-lg px-3 py-2";
-row.innerHTML = `<span class="text-ink2">${dateStr} · ${formatKRW(d.amount)} 입금</span><span class="font-bold text-mint">+${formatKRW(d.earned)}</span>`;
+row.innerHTML = `
+  <div>
+    <span class="font-bold text-ink">${dateStr} · ${formatKRW(d.amount)} 입금</span>
+    <span class="block text-[10px] text-ink2/80">지급예정: ${targetDateStr} (${d.dDayStr})</span>
+  </div>
+  <div class="text-right">
+    <span class="font-bold text-mint">+${formatKRW(d.expectedCycleInterest)}</span>
+    <span class="block text-[9px] text-gold font-medium">(주기 예상)</span>
+  </div>`;
 interestListEl.appendChild(row);
 });
 }
 
-// 금리 기록 리스트 페이징 및 출력
+// 금리 기록 리스트
 const rateArray = Object.values(appData.rateLog);
 rateArray.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
 
@@ -539,7 +541,7 @@ rateTableBody.appendChild(tr);
 });
 }
 
-// 거래내역 리스트 페이징 및 출력
+// 거래내역 리스트
 const txKeys = Object.keys(appData.transactions);
 const txArray = txKeys.map(key => ({ key, ...appData.transactions[key] }));
 txArray.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
@@ -644,7 +646,6 @@ amount: calculated,
 memo: "🧧 정기 이자 지급 수령",
 timestamp: now
 }).then(() => {
-// 지급 기준일 갱신 -> 이후엔 이 시점부터 다시 계산되어 중복 지급 방지
 return dbSet('familyBank/lastInterestPayout', now);
 }).then(() => {
 alert("이자가 성공적으로 계좌에 가산되었습니다!");
@@ -677,7 +678,6 @@ alert('올바른 금리 수치를 입력해 주세요.');
 return;
 }
 
-// 실제로 값이 바뀐 경우에만 기록 (동일 값 재저장 방지)
 const latest = getLatestRateConfig();
 if (latest.rate === rateVal && latest.period === ratePeriod && latest.type === rateType) {
 alert('변경된 금리 내용이 없습니다.');
@@ -811,7 +811,6 @@ renderAll();
 }
 };
 
-// 1분 주기의 이자 표시 갱신 (일 단위 계산이라 자주 갱신할 필요 없음, 자정 경과만 반영)
 setInterval(() => {
 if (isLoaded && appData.transactions && Object.keys(appData.transactions).length > 0) {
 const calculated = calculateInterest();
