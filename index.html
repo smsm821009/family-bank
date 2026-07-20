@@ -98,7 +98,8 @@ transform: rotate(-7deg) scale(0.94);
 <div class="bg-surface rounded-2xl p-5 shadow-sm border border-line">
 <div class="flex justify-between items-center">
 <div>
-<span class="text-xs text-ink2 font-medium">아직 지급 가능한 이자</span>
+<!-- 💡 문구 수정 반영: 지급 가능한 이자 -->
+<span class="text-xs text-ink2 font-medium">지급 가능한 이자</span>
 <div id="accumulated-interest" class="font-display text-2xl font-black text-mint mt-1">+0원</div>
 </div>
 <button onclick="applyInterest()" class="stamp-btn text-xs font-bold w-16 h-16 rounded-full flex items-center justify-center leading-tight">
@@ -398,7 +399,7 @@ const sorted = [...logs].sort((a,b) => new Date(b.timestamp) - new Date(a.timest
 return sorted[0];
 }
 
-// 실제 오늘 시점까지 쌓인 누적 이자 계산
+// 💡 수정된 실시간 지급 가능 이자 계산식
 function calculateInterest() {
 if (!isLoaded || !appData.transactions) return 0;
 
@@ -411,7 +412,6 @@ if(periodType === 'weekly') divisor = 7;
 if(periodType === 'daily') divisor = 1;
 
 const now = new Date();
-const nowDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 let totalAccumulated = 0;
 
 const payoutDate = appData.lastInterestPayout ? new Date(appData.lastInterestPayout) : null;
@@ -423,10 +423,14 @@ const txDate = new Date(tx.timestamp);
 if (txDate >= now) return;
 
 const effectiveStart = (payoutDate && payoutDate > txDate) ? payoutDate : txDate;
-const txDateOnly = new Date(effectiveStart.getFullYear(), effectiveStart.getMonth(), effectiveStart.getDate());
-const diffDays = Math.floor((nowDateOnly - txDateOnly) / (1000 * 60 * 60 * 24));
+
+
+// 날짜 밀리초 차이 기반 정밀 계산
+const diffMs = now - effectiveStart;
+const diffDays = diffMs / (1000 * 60 * 60 * 24);
 if (diffDays <= 0) return;
 
+// 일 단위 경과 비율을 적용하여 누적 이자 반영
 const interestEarned = tx.amount * rateDecimal * (diffDays / divisor);
 totalAccumulated += interestEarned;
 });
@@ -448,7 +452,7 @@ document.getElementById('rate-display').innerText = `${periodTxt} ${curRate.rate
 const calculated = calculateInterest();
 document.getElementById('accumulated-interest').innerText = `+${formatKRW(calculated)}`;
 
-// 🌟 [개선] 입금별 예상 이자 & 지급 예정일 출력
+// 입금별 예상 이자 & 지급 예정일 출력
 const activeRateBD = getLatestRateConfig();
 const rateDecimalBD = parseFloat(activeRateBD.rate) / 100;
 let cycleDays = 30; // 기본 월간
@@ -462,7 +466,7 @@ const depositArray = txs
 .map(tx => {
 const txDate = new Date(tx.timestamp);
 
-// 1주기(30일/7일/1일) 완성 시 지급되는 '1회 예상 이자'
+// 1주기 완성 시 지급되는 '1회 예상 이자'
 const expectedCycleInterest = Math.floor(tx.amount * rateDecimalBD);
 
 // 다음 이자 지급 예정일 계산 (입금일 + 주깃일)
