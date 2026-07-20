@@ -105,6 +105,21 @@ transform: rotate(-7deg) scale(0.94);
 전체<br>지급
 </button>
 </div>
+
+<!-- 입금별 예상 이자 배너 -->
+<div class="mt-4 pt-3 border-t border-dashed border-line">
+<div class="flex justify-between items-center mb-2">
+<span class="text-[11px] text-ink2 font-bold">입금별 예상 이자</span>
+<div class="flex items-center space-x-1">
+<button onclick="prevPage('interest')" id="prev-interest-btn" class="px-2 py-0.5 bg-paper text-[10px] font-bold rounded border border-line text-ink2 hover:bg-line/40 disabled:opacity-40">이전</button>
+<span id="interest-page-indicator" class="text-[10px] text-ink2 font-semibold px-1">1/1</span>
+<button onclick="nextPage('interest')" id="next-interest-btn" class="px-2 py-0.5 bg-paper text-[10px] font-bold rounded border border-line text-ink2 hover:bg-line/40 disabled:opacity-40">다음</button>
+</div>
+</div>
+<div id="interest-breakdown-list" class="space-y-1.5">
+<!-- JS에서 동적 렌더링 -->
+</div>
+</div>
 <div class="mt-4 pt-4 border-t border-dashed border-line flex justify-between items-center">
 <button onclick="openRateModal()" class="btn-active text-xs text-ink font-bold bg-paper hover:bg-line/40 px-4 py-2 rounded-lg border border-gold/40 flex items-center space-x-1">
 <i class="fa-solid fa-percent text-[10px] text-gold"></i>
@@ -114,6 +129,25 @@ transform: rotate(-7deg) scale(0.94);
 <i class="fa-solid fa-key text-[10px] text-ink2"></i>
 <span>PIN 설정</span>
 </button>
+</div>
+</div>
+
+<!-- 거래 내역 섹션 -->
+<div class="bg-surface rounded-2xl p-5 shadow-sm border border-line">
+<div class="flex justify-between items-center mb-4">
+<h3 class="font-bold text-ink text-sm flex items-center space-x-1.5">
+<i class="fa-solid fa-history text-mint"></i>
+<span>거래 내역</span>
+<span class="text-[10px] text-ink2/70 font-normal">(터치해 수정)</span>
+</h3>
+<div class="flex items-center space-x-1">
+<button onclick="prevPage('history')" id="prev-history-btn" class="px-2 py-1 bg-paper text-xs font-bold rounded border border-line text-ink2 hover:bg-line/40 disabled:opacity-40">이전</button>
+<span id="history-page-indicator" class="text-xs text-ink2 font-semibold px-1">1/1</span>
+<button onclick="nextPage('history')" id="next-history-btn" class="px-2 py-1 bg-paper text-xs font-bold rounded border border-line text-ink2 hover:bg-line/40 disabled:opacity-40">다음</button>
+</div>
+</div>
+<div id="history-list" class="space-y-3">
+<!-- JS에서 동적 렌더링 -->
 </div>
 </div>
 
@@ -142,25 +176,6 @@ transform: rotate(-7deg) scale(0.94);
 <!-- JS에서 동적 렌더링 -->
 </tbody>
 </table>
-</div>
-</div>
-
-<!-- 거래 내역 섹션 -->
-<div class="bg-surface rounded-2xl p-5 shadow-sm border border-line">
-<div class="flex justify-between items-center mb-4">
-<h3 class="font-bold text-ink text-sm flex items-center space-x-1.5">
-<i class="fa-solid fa-history text-mint"></i>
-<span>거래 내역</span>
-<span class="text-[10px] text-ink2/70 font-normal">(터치해 수정)</span>
-</h3>
-<div class="flex items-center space-x-1">
-<button onclick="prevPage('history')" id="prev-history-btn" class="px-2 py-1 bg-paper text-xs font-bold rounded border border-line text-ink2 hover:bg-line/40 disabled:opacity-40">이전</button>
-<span id="history-page-indicator" class="text-xs text-ink2 font-semibold px-1">1/1</span>
-<button onclick="nextPage('history')" id="next-history-btn" class="px-2 py-1 bg-paper text-xs font-bold rounded border border-line text-ink2 hover:bg-line/40 disabled:opacity-40">다음</button>
-</div>
-</div>
-<div id="history-list" class="space-y-3">
-<!-- JS에서 동적 렌더링 -->
 </div>
 </div>
 
@@ -338,6 +353,8 @@ let curPageHistory = 1;
 const limitHistory = 5;
 let curPageRate = 1;
 const limitRate = 5;
+let curPageInterest = 1;
+const limitInterest = 3;
 
 let selectedTxKey = null;
 let currentTxType = 'deposit';
@@ -385,7 +402,7 @@ const sorted = [...logs].sort((a,b) => new Date(b.timestamp) - new Date(a.timest
 return sorted[0];
 }
 
-// 실시간 복리/단리 이자 연산 (연결 끊김 상태에서의 루프 완전 방지)
+// 일 단위(자정 기준) 이자 연산 - 매일 00시에 하루치가 가산됨
 function calculateInterest() {
 if (!isLoaded || !appData.transactions) return 0;
 
@@ -398,6 +415,7 @@ if(periodType === 'weekly') divisor = 7;
 if(periodType === 'daily') divisor = 1;
 
 const now = new Date();
+const nowDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 let totalAccumulated = 0;
 
 const txs = Object.values(appData.transactions);
@@ -405,8 +423,10 @@ txs.forEach(tx => {
 const txDate = new Date(tx.timestamp);
 if (txDate >= now) return;
 
-const diffTime = Math.abs(now - txDate);
-const diffDays = diffTime / (1000 * 60 * 60 * 24);
+// 입금일 자정 기준으로 날짜만 비교 (예: 오늘 입금 시 오늘은 0일, 내일 00시부터 1일)
+const txDateOnly = new Date(txDate.getFullYear(), txDate.getMonth(), txDate.getDate());
+const diffDays = Math.floor((nowDateOnly - txDateOnly) / (1000 * 60 * 60 * 24));
+if (diffDays <= 0) return;
 
 const interestEarned = tx.amount * rateDecimal * (diffDays / divisor);
 totalAccumulated += interestEarned;
@@ -432,6 +452,51 @@ document.getElementById('rate-display').innerText = `${periodTxt} ${curRate.rate
 // 이자 액수
 const calculated = calculateInterest();
 document.getElementById('accumulated-interest').innerText = `+${formatKRW(calculated)}`;
+
+// 입금별 예상 이자 리스트 페이징 및 출력 (3줄씩, 나머지는 페이지네이션)
+const activeRateBD = getLatestRateConfig();
+const rateDecimalBD = parseFloat(activeRateBD.rate) / 100;
+let divisorBD = 30;
+if(activeRateBD.period === 'weekly') divisorBD = 7;
+if(activeRateBD.period === 'daily') divisorBD = 1;
+
+const nowBD = new Date();
+const nowDateOnlyBD = new Date(nowBD.getFullYear(), nowBD.getMonth(), nowBD.getDate());
+
+const depositArray = txs
+.filter(tx => tx.amount > 0)
+.map(tx => {
+const txDate = new Date(tx.timestamp);
+const txDateOnly = new Date(txDate.getFullYear(), txDate.getMonth(), txDate.getDate());
+const diffDays = Math.floor((nowDateOnlyBD - txDateOnly) / (1000 * 60 * 60 * 24));
+const earned = diffDays > 0 ? Math.floor(tx.amount * rateDecimalBD * (diffDays / divisorBD)) : 0;
+return { amount: tx.amount, memo: tx.memo, txDate, earned };
+})
+.sort((a,b) => b.txDate - a.txDate);
+
+const totalInterestPages = Math.ceil(depositArray.length / limitInterest) || 1;
+if (curPageInterest > totalInterestPages) curPageInterest = totalInterestPages;
+document.getElementById('interest-page-indicator').innerText = `${curPageInterest}/${totalInterestPages}`;
+document.getElementById('prev-interest-btn').disabled = (curPageInterest === 1);
+document.getElementById('next-interest-btn').disabled = (curPageInterest === totalInterestPages);
+
+const iStart = (curPageInterest - 1) * limitInterest;
+const slicedDeposits = depositArray.slice(iStart, iStart + limitInterest);
+
+const interestListEl = document.getElementById('interest-breakdown-list');
+interestListEl.innerHTML = '';
+
+if (slicedDeposits.length === 0) {
+interestListEl.innerHTML = `<div class="text-center py-3 text-[11px] text-ink2/60">입금 내역이 없습니다.</div>`;
+} else {
+slicedDeposits.forEach(d => {
+const dateStr = d.txDate.toLocaleDateString('ko-KR', {month:'short', day:'numeric'});
+const row = document.createElement('div');
+row.className = "flex justify-between items-center text-[11px] bg-paper rounded-lg px-3 py-2";
+row.innerHTML = `<span class="text-ink2">${dateStr} · ${formatKRW(d.amount)} 입금</span><span class="font-bold text-mint">+${formatKRW(d.earned)}</span>`;
+interestListEl.appendChild(row);
+});
+}
 
 // 금리 기록 리스트 페이징 및 출력
 const rateArray = Object.values(appData.rateLog);
@@ -700,6 +765,9 @@ renderAll();
 } else if (type === 'rate' && curPageRate > 1) {
 curPageRate--;
 renderAll();
+} else if (type === 'interest' && curPageInterest > 1) {
+curPageInterest--;
+renderAll();
 }
 };
 
@@ -718,16 +786,23 @@ if (curPageRate < maxPage) {
 curPageRate++;
 renderAll();
 }
+} else if (type === 'interest') {
+const depositCount = Object.values(appData.transactions).filter(tx => tx.amount > 0).length;
+const maxPage = Math.ceil(depositCount / limitInterest) || 1;
+if (curPageInterest < maxPage) {
+curPageInterest++;
+renderAll();
+}
 }
 };
 
-// 1초 주기의 이자 계산 갱신 루프 (로딩 완료된 상태에서만 안전하게 실행되도록 구조 개선)
+// 1분 주기의 이자 표시 갱신 (일 단위 계산이라 자주 갱신할 필요 없음, 자정 경과만 반영)
 setInterval(() => {
 if (isLoaded && appData.transactions && Object.keys(appData.transactions).length > 0) {
 const calculated = calculateInterest();
 document.getElementById('accumulated-interest').innerText = `+${formatKRW(calculated)}`;
 }
-}, 1000);
+}, 60000);
 
 </script>
 </body>
