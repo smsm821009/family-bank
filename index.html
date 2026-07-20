@@ -345,7 +345,8 @@ return fetch(`${DB_URL}/${path}.json`, { method: 'DELETE' })
 let appData = {
 transactions: {},
 rateLog: {},
-pin: ""
+pin: "",
+lastInterestPayout: null
 };
 
 let isLoaded = false; // 최초 로드 여부 플래그
@@ -369,10 +370,12 @@ if (data) {
 appData.transactions = data.transactions || {};
 appData.rateLog = data.rateLog || {};
 appData.pin = data.pin || "";
+appData.lastInterestPayout = data.lastInterestPayout || null;
 } else {
 appData.transactions = {};
 appData.rateLog = {};
 appData.pin = "";
+appData.lastInterestPayout = null;
 }
 isLoaded = true;
 renderAll();
@@ -418,13 +421,19 @@ const now = new Date();
 const nowDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 let totalAccumulated = 0;
 
+// 마지막 지급 기준일 (이미 지급된 이자는 그 시점부터 다시 계산되지 않도록 제외)
+const payoutDate = appData.lastInterestPayout ? new Date(appData.lastInterestPayout) : null;
+
 const txs = Object.values(appData.transactions);
 txs.forEach(tx => {
 const txDate = new Date(tx.timestamp);
 if (txDate >= now) return;
 
-// 입금일 자정 기준으로 날짜만 비교 (예: 오늘 입금 시 오늘은 0일, 내일 00시부터 1일)
-const txDateOnly = new Date(txDate.getFullYear(), txDate.getMonth(), txDate.getDate());
+// 이 입금이 마지막 지급일보다 이전이면, 계산 시작점을 지급일로 당겨온다
+const effectiveStart = (payoutDate && payoutDate > txDate) ? payoutDate : txDate;
+
+// 자정 기준으로 날짜만 비교 (예: 오늘 입금 시 오늘은 0일, 내일 00시부터 1일)
+const txDateOnly = new Date(effectiveStart.getFullYear(), effectiveStart.getMonth(), effectiveStart.getDate());
 const diffDays = Math.floor((nowDateOnly - txDateOnly) / (1000 * 60 * 60 * 24));
 if (diffDays <= 0) return;
 
@@ -462,12 +471,14 @@ if(activeRateBD.period === 'daily') divisorBD = 1;
 
 const nowBD = new Date();
 const nowDateOnlyBD = new Date(nowBD.getFullYear(), nowBD.getMonth(), nowBD.getDate());
+const payoutDateBD = appData.lastInterestPayout ? new Date(appData.lastInterestPayout) : null;
 
 const depositArray = txs
 .filter(tx => tx.amount > 0)
 .map(tx => {
 const txDate = new Date(tx.timestamp);
-const txDateOnly = new Date(txDate.getFullYear(), txDate.getMonth(), txDate.getDate());
+const effectiveStart = (payoutDateBD && payoutDateBD > txDate) ? payoutDateBD : txDate;
+const txDateOnly = new Date(effectiveStart.getFullYear(), effectiveStart.getMonth(), effectiveStart.getDate());
 const diffDays = Math.floor((nowDateOnlyBD - txDateOnly) / (1000 * 60 * 60 * 24));
 const earned = diffDays > 0 ? Math.floor(tx.amount * rateDecimalBD * (diffDays / divisorBD)) : 0;
 return { amount: tx.amount, memo: tx.memo, txDate, earned };
@@ -627,18 +638,14 @@ return;
 }
 verifyPin(() => {
 if(confirm(`${formatKRW(calculated)}의 이자를 지급 처리하시겠습니까?`)) {
+const now = new Date().toISOString();
 dbPush('familyBank/transactions', {
 amount: calculated,
 memo: "🧧 정기 이자 지급 수령",
-timestamp: new Date().toISOString()
+timestamp: now
 }).then(() => {
-const latestRate = getLatestRateConfig();
-return dbPush('familyBank/rateLog', {
-rate: latestRate.rate,
-period: latestRate.period,
-type: latestRate.type,
-timestamp: new Date().toISOString()
-});
+// 지급 기준일 갱신 -> 이후엔 이 시점부터 다시 계산되어 중복 지급 방지
+return dbSet('familyBank/lastInterestPayout', now);
 }).then(() => {
 alert("이자가 성공적으로 계좌에 가산되었습니다!");
 loadData();
@@ -667,6 +674,14 @@ const rateType = document.getElementById('rate-type').value;
 
 if(isNaN(rateVal) || rateVal < 0) {
 alert('올바른 금리 수치를 입력해 주세요.');
+return;
+}
+
+// 실제로 값이 바뀐 경우에만 기록 (동일 값 재저장 방지)
+const latest = getLatestRateConfig();
+if (latest.rate === rateVal && latest.period === ratePeriod && latest.type === rateType) {
+alert('변경된 금리 내용이 없습니다.');
+closeRateModal();
 return;
 }
 
