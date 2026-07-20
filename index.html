@@ -283,41 +283,47 @@ transform: rotate(-7deg) scale(0.94);
 
 </div>
 
-<!-- Firebase SDK 및 로직 -->
-<script type="module">
-import { initializeApp } from "https://esm.sh/firebase@10.8.0/app";
-import { getDatabase, ref, onValue, set, push, remove, update } from "https://esm.sh/firebase@10.8.0/database";
+<!-- Firebase REST API 기반 로직 (SDK 미사용, 순수 fetch) -->
+<script>
+const DB_URL = "https://family-bank-93e76-default-rtdb.asia-southeast1.firebasedatabase.app";
+
+function setStatus(state, msg) {
+const statusEl = document.getElementById('connection-status');
+const statusText = document.getElementById('status-text');
+if (!statusEl) return;
+if (state === 'connected') {
+statusEl.className = "flex items-center space-x-1.5 bg-mint/10 px-2.5 py-1 rounded-full text-xs";
+statusEl.innerHTML = `<span class="w-2 h-2 rounded-full bg-mint animate-pulse"></span><span class="text-mint font-bold">실시간 연결</span>`;
+} else if (state === 'error') {
+statusEl.className = "flex items-center space-x-1.5 bg-stamp/10 px-2.5 py-1 rounded-full text-xs";
+statusEl.innerHTML = `<span class="w-2 h-2 rounded-full bg-stamp"></span><span class="text-stamp font-bold">${msg || '연결 에러'}</span>`;
+} else {
+statusEl.className = "flex items-center space-x-1.5 bg-white/10 px-2.5 py-1 rounded-full text-xs";
+statusEl.innerHTML = `<span class="w-2 h-2 rounded-full bg-gold animate-pulse"></span><span id="status-text">연결 중...</span>`;
+}
+}
 
 window.addEventListener('error', (e) => {
 console.error("전역 스크립트 에러:", e.message, e);
-const statusText = document.getElementById('status-text');
-const statusEl = document.getElementById('connection-status');
-if (statusText && statusEl) {
-statusEl.className = "flex items-center space-x-1.5 bg-stamp/10 px-2.5 py-1 rounded-full text-xs";
-statusText.textContent = "스크립트 오류: " + e.message;
-}
+setStatus('error', '스크립트 오류: ' + e.message);
 });
 
-const firebaseConfig = {
-apiKey: "AIzaSyB6dkkbs0Nv2KRexrn0bc88prZryrCtm0w",
-authDomain: "family-bank-93e76.firebaseapp.com",
-databaseURL: "https://family-bank-93e76-default-rtdb.asia-southeast1.firebasedatabase.app",
-projectId: "family-bank-93e76",
-storageBucket: "family-bank-93e76.firebasestorage.app",
-messagingSenderId: "1016884674340",
-appId: "1:1016884674340:web:55a3dc0f6dcb1b799bfdb1"
-};
-
-let app, db;
-try {
-app = initializeApp(firebaseConfig);
-db = getDatabase(app);
-} catch (initErr) {
-const statusEl = document.getElementById('connection-status');
-const statusText = document.getElementById('status-text');
-statusEl.className = "flex items-center space-x-1.5 bg-stamp/10 px-2.5 py-1 rounded-full text-xs";
-statusText.textContent = "초기화 오류: " + initErr.message;
-console.error("Firebase 초기화 실패:", initErr);
+// ---- REST API 헬퍼 함수들 (Firebase SDK 대체) ----
+function dbSet(path, data) {
+return fetch(`${DB_URL}/${path}.json`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) })
+.then(r => { if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+}
+function dbUpdate(path, data) {
+return fetch(`${DB_URL}/${path}.json`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) })
+.then(r => { if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+}
+function dbPush(path, data) {
+return fetch(`${DB_URL}/${path}.json`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) })
+.then(r => { if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+}
+function dbDelete(path) {
+return fetch(`${DB_URL}/${path}.json`, { method: 'DELETE' })
+.then(r => { if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
 }
 
 // 초기 안전 데이터 구조 정의
@@ -336,20 +342,13 @@ const limitRate = 5;
 let selectedTxKey = null;
 let currentTxType = 'deposit';
 
-const dbRef = ref(db, 'familyBank');
-
-// [최우선] 실시간 데이터 리스너 등록
-try {
-onValue(dbRef, (snapshot) => {
-const statusEl = document.getElementById('connection-status');
-const statusText = document.getElementById('status-text');
-
-// 상태 표시등 즉각 녹색 동기화 완료 처리
-statusEl.className = "flex items-center space-x-1.5 bg-mint/10 px-2.5 py-1 rounded-full text-xs";
-statusEl.innerHTML = <span class="w-2 h-2 rounded-full bg-mint animate-pulse"&gt;&lt;/span&gt;&lt;span class="text-mint font-bold"&gt;실시간 연결&lt;/span>;
-
-if (snapshot.exists()) {
-const data = snapshot.val();
+// [최우선] 데이터 로드 (REST GET, 3초마다 폴링하여 준실시간 동기화)
+function loadData() {
+fetch(`${DB_URL}/familyBank.json`)
+.then(r => { if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+.then(data => {
+setStatus('connected');
+if (data) {
 appData.transactions = data.transactions || {};
 appData.rateLog = data.rateLog || {};
 appData.pin = data.pin || "";
@@ -358,22 +357,16 @@ appData.transactions = {};
 appData.rateLog = {};
 appData.pin = "";
 }
-
-isLoaded = true; // 통신 완료 상태 세팅
+isLoaded = true;
 renderAll();
-}, (error) => {
-console.error("Firebase Sync Error:", error);
-const statusEl = document.getElementById('connection-status');
-statusEl.className = "flex items-center space-x-1.5 bg-stamp/10 px-2.5 py-1 rounded-full text-xs";
-statusEl.innerHTML = <span class="w-2 h-2 rounded-full bg-stamp"&gt;&lt;/span&gt;&lt;span class="text-stamp font-bold"&gt;연결 에러&lt;/span>;
+})
+.catch(err => {
+console.error("데이터 로드 실패:", err);
+setStatus('error', '연결 에러: ' + err.message);
 });
-} catch (regErr) {
-console.error("리스너 등록 실패:", regErr);
-const statusEl = document.getElementById('connection-status');
-const statusText = document.getElementById('status-text');
-statusEl.className = "flex items-center space-x-1.5 bg-stamp/10 px-2.5 py-1 rounded-full text-xs";
-statusText.textContent = "등록 오류: " + regErr.message;
 }
+loadData();
+setInterval(loadData, 3000);
 
 function formatKRW(val) {
 return new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(val).replace('₩', '') + '원';
@@ -434,11 +427,11 @@ document.getElementById('balance-display').innerText = formatKRW(balance);
 // 현재 금리 텍스트 표시
 const curRate = getLatestRateConfig();
 const periodTxt = curRate.period === 'monthly' ? '월간' : curRate.period === 'weekly' ? '주간' : '일일';
-document.getElementById('rate-display').innerText = ${periodTxt} ${curRate.rate}% · 단리;
+document.getElementById('rate-display').innerText = `${periodTxt} ${curRate.rate}% · 단리`;
 
 // 이자 액수
 const calculated = calculateInterest();
-document.getElementById('accumulated-interest').innerText = +${formatKRW(calculated)}`;
+document.getElementById('accumulated-interest').innerText = `+${formatKRW(calculated)}`;
 
 // 금리 기록 리스트 페이징 및 출력
 const rateArray = Object.values(appData.rateLog);
@@ -446,7 +439,7 @@ rateArray.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
 
 const totalRatePages = Math.ceil(rateArray.length / limitRate) || 1;
 if(curPageRate > totalRatePages) curPageRate = totalRatePages;
-document.getElementById('rate-page-indicator').innerText = ``${curPageRate}/${totalRatePages};
+document.getElementById('rate-page-indicator').innerText = `${curPageRate}/${totalRatePages}`;
 document.getElementById('prev-rate-btn').disabled = (curPageRate === 1);
 document.getElementById('next-rate-btn').disabled = (curPageRate === totalRatePages);
 
@@ -457,15 +450,15 @@ const rateTableBody = document.getElementById('rate-log-list');
 rateTableBody.innerHTML = '';
 
 if(slicedRates.length === 0) {
-rateTableBody.innerHTML = <tr&gt;&lt;td colspan="2" class="py-4 text-center text-xs text-ink2/60"&gt;등록된 금리 설정 기록이 없습니다.&lt;/td&gt;&lt;/tr>;
+rateTableBody.innerHTML = `<tr><td colspan="2" class="py-4 text-center text-xs text-ink2/60">등록된 금리 설정 기록이 없습니다.</td></tr>`;
 } else {
 slicedRates.forEach(r => {
 const tr = document.createElement('tr');
 tr.className = "border-b border-line hover:bg-paper/60";
 const dateStr = new Date(r.timestamp).toLocaleDateString('ko-KR', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
 const rPeriod = r.period === 'monthly' ? '월' : r.period === 'weekly' ? '주' : '일';
-tr.innerHTML = <td class="py-3 px-3 font-medium text-ink2"&gt;${dateStr}</td>
-<td class="py-3 px-3 text-right font-bold text-ink">{rPeriod} · ${r.type === 'simple' ? '단리' : '복리'})&lt;/span&gt;&lt;/td>;
+tr.innerHTML = `<td class="py-3 px-3 font-medium text-ink2">${dateStr}</td>
+<td class="py-3 px-3 text-right font-bold text-ink">${r.rate}% <span class="text-[10px] text-ink2/70 font-normal">(${rPeriod} · ${r.type === 'simple' ? '단리' : '복리'})</span></td>`;
 rateTableBody.appendChild(tr);
 });
 }
@@ -477,7 +470,7 @@ txArray.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
 
 const totalHistoryPages = Math.ceil(txArray.length / limitHistory) || 1;
 if(curPageHistory > totalHistoryPages) curPageHistory = totalHistoryPages;
-document.getElementById('history-page-indicator').innerText = ``${curPageHistory}/${totalHistoryPages};
+document.getElementById('history-page-indicator').innerText = `${curPageHistory}/${totalHistoryPages}`;
 document.getElementById('prev-history-btn').disabled = (curPageHistory === 1);
 document.getElementById('next-history-btn').disabled = (curPageHistory === totalHistoryPages);
 
@@ -488,7 +481,7 @@ const historyContainer = document.getElementById('history-list');
 historyContainer.innerHTML = '';
 
 if(slicedHistory.length === 0) {
-historyContainer.innerHTML = <div class="text-center py-8 text-xs text-ink2/60"&gt;기록된 거래가 존재하지 않습니다.&lt;/div>;
+historyContainer.innerHTML = `<div class="text-center py-8 text-xs text-ink2/60">기록된 거래가 존재하지 않습니다.</div>`;
 } else {
 slicedHistory.forEach(tx => {
 const item = document.createElement('div');
@@ -498,9 +491,17 @@ item.onclick = () => openDetailModal(tx.key);
 const isPlus = tx.amount >= 0;
 const dateStr = new Date(tx.timestamp).toLocaleDateString('ko-KR', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
 
-item.innerHTML = <div class="flex items-center space-x-3"&gt; &lt;div class="w-9 h-9 rounded-full flex items-center justify-center${isPlus ? 'bg-mint/10 text-mint' : 'bg-stamp/10 text-stamp'}">
-<i class="fa-solid {tx.memo || (isPlus ? '저금' : '출금')}</p>
-<p class="text-[10px] text-ink2/70 mt-0.5">{isPlus ? 'text-mint' : 'text-stamp'}">${formatKRW(tx.amount)}&lt;/span&gt;;
+item.innerHTML = `<div class="flex items-center space-x-3">
+<div class="w-9 h-9 rounded-full flex items-center justify-center ${isPlus ? 'bg-mint/10 text-mint' : 'bg-stamp/10 text-stamp'}">
+<i class="fa-solid ${isPlus ? 'fa-arrow-down' : 'fa-arrow-up'}"></i>
+</div>
+<div>
+<p class="text-sm font-bold text-ink">${tx.memo || (isPlus ? '저금' : '출금')}</p>
+<p class="text-[10px] text-ink2/70 mt-0.5">${dateStr}</p>
+</div>
+</div>
+<span class="text-sm font-black ${isPlus ? 'text-mint' : 'text-stamp'}">${formatKRW(tx.amount)}</span>
+`;
 historyContainer.appendChild(item);
 });
 }
@@ -543,13 +544,13 @@ return;
 }
 const processedAmount = currentTxType === 'deposit' ? Math.floor(parseFloat(rawAmt)) : -Math.floor(parseFloat(rawAmt));
 
-const newTxRef = push(ref(db, 'familyBank/transactions'));
-set(newTxRef, {
+dbPush('familyBank/transactions', {
 amount: processedAmount,
 memo: memo || (currentTxType === 'deposit' ? '저금' : '출금'),
 timestamp: new Date().toISOString()
 }).then(() => {
 closeModal();
+loadData();
 }).catch(err => alert("저장 실패: " + err.message));
 };
 
@@ -560,23 +561,22 @@ alert("지급할 이자 금액이 없습니다.");
 return;
 }
 verifyPin(() => {
-if(confirm(``${formatKRW(calculated)}의 이자를 지급 처리하시겠습니까?`)) {
-const newTxRef = push(ref(db, 'familyBank/transactions'));
-set(newTxRef, {
+if(confirm(`${formatKRW(calculated)}의 이자를 지급 처리하시겠습니까?`)) {
+dbPush('familyBank/transactions', {
 amount: calculated,
 memo: "🧧 정기 이자 지급 수령",
 timestamp: new Date().toISOString()
 }).then(() => {
 const latestRate = getLatestRateConfig();
-const newRateRef = push(ref(db, 'familyBank/rateLog'));
-set(newRateRef, {
+return dbPush('familyBank/rateLog', {
 rate: latestRate.rate,
 period: latestRate.period,
 type: latestRate.type,
 timestamp: new Date().toISOString()
+});
 }).then(() => {
 alert("이자가 성공적으로 계좌에 가산되었습니다!");
-});
+loadData();
 }).catch(err => alert("이자 가산 실패: " + err.message));
 }
 });
@@ -605,8 +605,7 @@ alert('올바른 금리 수치를 입력해 주세요.');
 return;
 }
 
-const newRateRef = push(ref(db, 'familyBank/rateLog'));
-set(newRateRef, {
+dbPush('familyBank/rateLog', {
 rate: rateVal,
 period: ratePeriod,
 type: rateType,
@@ -614,6 +613,7 @@ timestamp: new Date().toISOString()
 }).then(() => {
 closeRateModal();
 alert('금리가 변경되었습니다.');
+loadData();
 }).catch(err => alert("금리 설정 실패: " + err.message));
 };
 
@@ -650,13 +650,13 @@ return;
 
 verifyPin(() => {
 const finalAmt = originalTx.amount >= 0 ? Math.floor(inputAmt) : -Math.floor(inputAmt);
-const updateRef = ref(db, familyBank/transactions/${selectedTxKey}`);
-update(updateRef, {
+dbUpdate(`familyBank/transactions/${selectedTxKey}`, {
 amount: finalAmt,
 memo: memo,
 timestamp: new Date(dateVal).toISOString()
 }).then(() => {
 closeDetailModal();
+loadData();
 }).catch(err => alert("수정 오류: " + err.message));
 });
 };
@@ -665,9 +665,9 @@ window.deleteTransaction = function() {
 if(!selectedTxKey) return;
 verifyPin(() => {
 if(confirm("이 거래 내역을 정말로 영구 삭제하시겠습니까?")) {
-const deleteRef = ref(db, familyBank/transactions/${selectedTxKey}`);
-remove(deleteRef).then(() => {
+dbDelete(`familyBank/transactions/${selectedTxKey}`).then(() => {
 closeDetailModal();
+loadData();
 }).catch(err => alert("삭제 실패: " + err.message));
 }
 });
@@ -686,10 +686,10 @@ document.getElementById('pin-modal').classList.add('hidden');
 
 window.submitPin = function() {
 const newPin = document.getElementById('pin-input').value.trim();
-const pinRef = ref(db, 'familyBank/pin');
-set(pinRef, newPin).then(() => {
+dbSet('familyBank/pin', newPin).then(() => {
 closePinModal();
 alert("PIN 암호 설정이 완료되었습니다.");
+loadData();
 }).catch(err => alert("PIN 설정 실패: " + err.message));
 };
 
@@ -725,7 +725,7 @@ renderAll();
 setInterval(() => {
 if (isLoaded && appData.transactions && Object.keys(appData.transactions).length > 0) {
 const calculated = calculateInterest();
-document.getElementById('accumulated-interest').innerText = +${formatKRW(calculated)};
+document.getElementById('accumulated-interest').innerText = `+${formatKRW(calculated)}`;
 }
 }, 1000);
 
