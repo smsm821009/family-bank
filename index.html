@@ -392,10 +392,9 @@ const sorted = [...logs].sort((a,b) => new Date(b.timestamp) - new Date(a.timest
 return sorted[0];
 }
 
-// 🎯 완벽한 무결점 금융 회계 알고리즘
-// [총 지급되어야 할 만기 이자 누적액] - [이미 거래내역으로 지급받은 이자 총액]
-function calculateInterest() {
-if (!isLoaded || !appData.transactions) return 0;
+// 🎯 입금건별 개별 이자 지급 대상 및 지급 가능 금액 정밀 계산
+function getInterestPayableItems() {
+if (!isLoaded || !appData.transactions) return { items: [], totalAmount: 0 };
 
 const activeRate = getLatestRateConfig();
 const ratePercent = parseFloat(activeRate.rate) || 5;
@@ -407,33 +406,31 @@ if (periodType === 'weekly') cycleDays = 7;
 if (periodType === 'daily') cycleDays = 1;
 
 const now = new Date();
-const txs = Object.values(appData.transactions);
+const txKeys = Object.keys(appData.transactions);
 
-// 1. 지금까지 거래 내역을 통해 실제 수령한 총 이자 금액 계산
-const alreadyPaidTotal = txs
-.filter(tx => tx.memo === "🧧 정기 이자 지급 수령" && Number(tx.amount) > 0)
-.reduce((sum, tx) => sum + Number(tx.amount), 0);
+let payableItems = [];
+let totalAmount = 0;
 
-// 2. 현재 등록된 모든 입금건 중 '오늘 기준' 지급 예정일이 지난 총 발생 이자 계산
-let totalEarnedInterest = 0;
-
-txs.forEach(tx => {
+txKeys.forEach(key => {
+const tx = appData.transactions[key];
 const numAmt = Number(tx.amount);
-if (!isNaN(numAmt) && numAmt > 0 && tx.memo !== "🧧 정기 이자 지급 수령") {
+
+// 입금 거래이며, 아직 이자가 지급되지 않은(isInterestPaid !== true) 건만 대상
+if (!isNaN(numAmt) && numAmt > 0 && tx.memo !== "🧧 정기 이자 지급 수령" && !tx.isInterestPaid) {
 const txDate = new Date(tx.timestamp);
 const payoutDate = new Date(txDate);
 payoutDate.setDate(payoutDate.getDate() + cycleDays);
 
-// 만기일이 오늘 이하(도래함)라면 이자 발생 조건 충족
+// 만기일이 오늘 이하(지급 시점 도래)인 경우
 if (now.getTime() >= payoutDate.getTime()) {
-totalEarnedInterest += Math.floor(numAmt * rateDecimal);
+const interestAmt = Math.floor(numAmt * rateDecimal);
+payableItems.push({ key, interestAmt });
+totalAmount += interestAmt;
 }
 }
 });
 
-// 3. 차액 산출 (음수 방지)
-const availableInterest = totalEarnedInterest - alreadyPaidTotal;
-return availableInterest > 0 ? availableInterest : 0;
+return { items: payableItems, totalAmount };
 }
 
 function renderAll() {
@@ -447,17 +444,19 @@ const curRate = getLatestRateConfig();
 const periodTxt = curRate.period === 'monthly' ? '월간' : curRate.period === 'weekly' ? '주간' : '일일';
 document.getElementById('rate-display').innerText = `${periodTxt} ${curRate.rate || 5}% · 단리`;
 
-const calculated = calculateInterest();
-document.getElementById('accumulated-interest').innerText = `+${formatKRW(calculated)}`;
+const payableData = getInterestPayableItems();
+document.getElementById('accumulated-interest').innerText = `+${formatKRW(payableData.totalAmount)}`;
 
-// 입금별 예상 이자 배너
+// 입금별 예상 이자 배너 (체크표시 ✅ 포함)
 const activeRateBD = getLatestRateConfig();
 const rateDecimalBD = (parseFloat(activeRateBD.rate) || 5) / 100;
 let cycleDays = 30; 
 if(activeRateBD.period === 'weekly') cycleDays = 7;
 if(activeRateBD.period === 'daily') cycleDays = 1;
 
-const depositArray = txs
+const txKeys = Object.keys(appData.transactions);
+const depositArray = txKeys
+.map(key => ({ key, ...appData.transactions[key] }))
 .filter(tx => Number(tx.amount) > 0 && tx.memo !== "🧧 정기 이자 지급 수령")
 .map(tx => {
 const txDate = new Date(tx.timestamp);
@@ -467,7 +466,15 @@ const expectedCycleInterest = Math.floor(numAmt * rateDecimalBD);
 const nextPayoutDate = new Date(txDate);
 nextPayoutDate.setDate(nextPayoutDate.getDate() + cycleDays);
 
-return { amount: numAmt, memo: tx.memo, txDate, expectedCycleInterest, nextPayoutDate };
+return { 
+key: tx.key,
+amount: numAmt, 
+memo: tx.memo, 
+txDate, 
+expectedCycleInterest, 
+nextPayoutDate,
+isInterestPaid: !!tx.isInterestPaid
+};
 })
 .sort((a,b) => b.txDate - a.txDate);
 
@@ -490,7 +497,21 @@ slicedDeposits.forEach(d => {
 const dateStr = d.txDate.toLocaleDateString('ko-KR', {month:'long', day:'numeric'});
 const targetDateStr = d.nextPayoutDate.toLocaleDateString('ko-KR', {month:'long', day:'numeric'});
 const row = document.createElement('div');
-row.className = "flex justify-between items-center text-[11px] bg-paper rounded-lg px-3 py-2";
+row.className = "flex justify-between items-center text-[11px] bg-paper rounded-lg px-3 py-2 border border-line/50";
+
+if (d.isInterestPaid) {
+// ✅ 이자 지급 완료 상태 표기
+row.innerHTML = `
+  <div>
+    <span class="font-bold text-ink">${dateStr} · ${formatKRW(d.amount)} 입금</span>
+    <span class="block text-[10px] text-mint font-semibold mt-0.5">✅ 이자 지급 완료됨</span>
+  </div>
+  <div class="text-right">
+    <span class="font-bold text-mint/60 line-through">+${formatKRW(d.expectedCycleInterest)}</span>
+    <span class="block text-[9px] text-mint font-bold">(수령 완료)</span>
+  </div>`;
+} else {
+// 미지급 예정 상태 표기
 row.innerHTML = `
   <div>
     <span class="font-bold text-ink">${dateStr} · ${formatKRW(d.amount)} 입금</span>
@@ -500,6 +521,8 @@ row.innerHTML = `
     <span class="font-bold text-mint">+${formatKRW(d.expectedCycleInterest)}</span>
     <span class="block text-[9px] text-gold font-medium">(주기 예상)</span>
   </div>`;
+}
+
 interestListEl.appendChild(row);
 });
 }
@@ -535,7 +558,6 @@ rateTableBody.appendChild(tr);
 }
 
 // 거래내역 리스트
-const txKeys = Object.keys(appData.transactions);
 const txArray = txKeys.map(key => ({ key, ...appData.transactions[key] }));
 txArray.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
 
@@ -618,30 +640,42 @@ const processedAmount = currentTxType === 'deposit' ? Math.floor(parseFloat(rawA
 dbPush('familyBank/transactions', {
 amount: processedAmount,
 memo: memo || (currentTxType === 'deposit' ? '저금' : '출금'),
-timestamp: new Date().toISOString()
+timestamp: new Date().toISOString(),
+isInterestPaid: false
 }).then(() => {
 closeModal();
 loadData();
 }).catch(err => alert("저장 실패: " + err.message));
 };
 
-// 🧧 전체 지급 처리
+// 🧧 전체 지급 처리 (개별 입금건에 ✅ 지급완료 마킹)
 window.applyInterest = function() {
-const calculated = calculateInterest();
-if (calculated <= 0) {
+const payableData = getInterestPayableItems();
+
+if (payableData.totalAmount <= 0 || payableData.items.length === 0) {
 alert("현재 지급 가능한 만기 도래 이자가 없습니다.");
 return;
 }
+
 verifyPin(() => {
-if(confirm(`${formatKRW(calculated)}의 이자를 지급 처리하시겠습니까?`)) {
+if(confirm(`${formatKRW(payableData.totalAmount)}의 이자를 지급 처리하시겠습니까?`)) {
 const now = new Date().toISOString();
+
+// 1. 이자 수령 내역 거래 추가
 dbPush('familyBank/transactions', {
-amount: calculated,
+amount: payableData.totalAmount,
 memo: "🧧 정기 이자 지급 수령",
 timestamp: now
 }).then(() => {
-alert("이자가 성공적으로 계좌에 가산되었습니다!");
+// 2. 지급 대상이 된 각 입금건들에 isInterestPaid: true 업데이트
+const updatePromises = payableData.items.map(item => {
+return dbUpdate(`familyBank/transactions/${item.key}`, { isInterestPaid: true });
+});
+
+Promise.all(updatePromises).then(() => {
+alert("이자가 성공적으로 계좌에 가산되었으며, 해당 입금건의 이자 지급이 완료되었습니다!");
 loadData();
+});
 }).catch(err => alert("이자 가산 실패: " + err.message));
 }
 });
