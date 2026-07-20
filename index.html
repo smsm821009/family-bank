@@ -26,7 +26,7 @@ line: '#E3D9C3'
 </script>
 <!-- Font Awesome (아이콘) -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-<!-- Google Fonts (Noto Sans KR + Noto Serif KR) -->
+<!-- Google Fonts -->
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=Noto+Serif+KR:wght@700;900&display=swap" rel="stylesheet">
 <style>
 body {
@@ -66,7 +66,6 @@ transform: rotate(-7deg) scale(0.94);
 <header class="bg-ink text-white px-6 pt-8 pb-9 rounded-b-[2rem] shadow-lg">
 <div class="flex justify-between items-center mb-6">
 <span class="text-sm text-white/60 font-medium tracking-wide">현재 잔액</span>
-<!-- 상태 표시 등 (연결 상태) -->
 <div id="connection-status" class="flex items-center space-x-1.5 bg-white/10 px-2.5 py-1 rounded-full text-xs">
 <span class="w-2 h-2 rounded-full bg-gold animate-pulse"></span>
 <span id="status-text">연결 중...</span>
@@ -98,7 +97,6 @@ transform: rotate(-7deg) scale(0.94);
 <div class="bg-surface rounded-2xl p-5 shadow-sm border border-line">
 <div class="flex justify-between items-center">
 <div>
-<!-- 💡 문구 수정 반영: 지급 가능한 이자 -->
 <span class="text-xs text-ink2 font-medium">지급 가능한 이자</span>
 <div id="accumulated-interest" class="font-display text-2xl font-black text-mint mt-1">+0원</div>
 </div>
@@ -107,7 +105,7 @@ transform: rotate(-7deg) scale(0.94);
 </button>
 </div>
 
-<!-- 입금별 예상 이자 배너 (지급 예정일 포함) -->
+<!-- 입금별 예상 이자 배너 -->
 <div class="mt-4 pt-3 border-t border-dashed border-line">
 <div class="flex justify-between items-center mb-2">
 <span class="text-[11px] text-ink2 font-bold">입금별 예상 이자 & 지급 예정일</span>
@@ -399,43 +397,50 @@ const sorted = [...logs].sort((a,b) => new Date(b.timestamp) - new Date(a.timest
 return sorted[0];
 }
 
-// 💡 수정된 실시간 지급 가능 이자 계산식
+// 💡 보장된 실시간 이자 계산 로직
 function calculateInterest() {
 if (!isLoaded || !appData.transactions) return 0;
 
 const activeRate = getLatestRateConfig();
-const rateDecimal = parseFloat(activeRate.rate) / 100;
-const periodType = activeRate.period;
+const ratePercent = parseFloat(activeRate.rate) || 5;
+const rateDecimal = ratePercent / 100;
+const periodType = activeRate.period || 'monthly';
 
-let divisor = 30;
-if(periodType === 'weekly') divisor = 7;
-if(periodType === 'daily') divisor = 1;
+let cycleDays = 30;
+if(periodType === 'weekly') cycleDays = 7;
+if(periodType === 'daily') cycleDays = 1;
 
 const now = new Date();
-let totalAccumulated = 0;
+// 시, 분, 초 제거 후 날짜 단위 비교
+const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
+let totalInterest = 0;
 const payoutDate = appData.lastInterestPayout ? new Date(appData.lastInterestPayout) : null;
 
 const txs = Object.values(appData.transactions);
 txs.forEach(tx => {
-if (tx.amount <= 0) return; // 입금 건만 이자 계산
+if (tx.amount <= 0) return; // 입금건만 이자 발생
 const txDate = new Date(tx.timestamp);
-if (txDate >= now) return;
+const txDay = new Date(txDate.getFullYear(), txDate.getMonth(), txDate.getDate());
 
-const effectiveStart = (payoutDate && payoutDate > txDate) ? payoutDate : txDate;
+let startDate = txDay;
+if (payoutDate) {
+const pDay = new Date(payoutDate.getFullYear(), payoutDate.getMonth(), payoutDate.getDate());
+if (pDay > startDate) startDate = pDay;
+}
 
-
-// 날짜 밀리초 차이 기반 정밀 계산
-const diffMs = now - effectiveStart;
-const diffDays = diffMs / (1000 * 60 * 60 * 24);
+// 시작일부터 오늘까지의 총 경과 일수
+const diffDays = Math.floor((today - startDate) / (1000 * 60 * 60 * 24));
 if (diffDays <= 0) return;
 
-// 일 단위 경과 비율을 적용하여 누적 이자 반영
-const interestEarned = tx.amount * rateDecimal * (diffDays / divisor);
-totalAccumulated += interestEarned;
+// 주깃수 계산 (지급일 도달 시 1주기 이상 발생)
+const cyclesPassed = Math.floor(diffDays / cycleDays);
+if (cyclesPassed >= 1) {
+totalInterest += Math.floor(tx.amount * rateDecimal * cyclesPassed);
+}
 });
 
-return Math.max(0, Math.floor(totalAccumulated));
+return totalInterest;
 }
 
 function renderAll() {
@@ -447,38 +452,28 @@ document.getElementById('balance-display').innerText = formatKRW(balance);
 
 const curRate = getLatestRateConfig();
 const periodTxt = curRate.period === 'monthly' ? '월간' : curRate.period === 'weekly' ? '주간' : '일일';
-document.getElementById('rate-display').innerText = `${periodTxt} ${curRate.rate}% · 단리`;
+document.getElementById('rate-display').innerText = `${periodTxt} ${curRate.rate || 5}% · 단리`;
 
 const calculated = calculateInterest();
 document.getElementById('accumulated-interest').innerText = `+${formatKRW(calculated)}`;
 
-// 입금별 예상 이자 & 지급 예정일 출력
+// 입금별 예상 이자 배너
 const activeRateBD = getLatestRateConfig();
-const rateDecimalBD = parseFloat(activeRateBD.rate) / 100;
-let cycleDays = 30; // 기본 월간
+const rateDecimalBD = (parseFloat(activeRateBD.rate) || 5) / 100;
+let cycleDays = 30; 
 if(activeRateBD.period === 'weekly') cycleDays = 7;
 if(activeRateBD.period === 'daily') cycleDays = 1;
-
-const nowBD = new Date();
 
 const depositArray = txs
 .filter(tx => tx.amount > 0)
 .map(tx => {
 const txDate = new Date(tx.timestamp);
-
-// 1주기 완성 시 지급되는 '1회 예상 이자'
 const expectedCycleInterest = Math.floor(tx.amount * rateDecimalBD);
 
-// 다음 이자 지급 예정일 계산 (입금일 + 주깃일)
 const nextPayoutDate = new Date(txDate);
 nextPayoutDate.setDate(nextPayoutDate.getDate() + cycleDays);
 
-// 남아있는 일수 (D-Day)
-const diffTime = nextPayoutDate - nowBD;
-const dDay = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-const dDayStr = dDay > 0 ? `D-${dDay}` : '지급일 도달';
-
-return { amount: tx.amount, memo: tx.memo, txDate, expectedCycleInterest, nextPayoutDate, dDayStr };
+return { amount: tx.amount, memo: tx.memo, txDate, expectedCycleInterest, nextPayoutDate };
 })
 .sort((a,b) => b.txDate - a.txDate);
 
@@ -498,14 +493,14 @@ if (slicedDeposits.length === 0) {
 interestListEl.innerHTML = `<div class="text-center py-3 text-[11px] text-ink2/60">입금 내역이 없습니다.</div>`;
 } else {
 slicedDeposits.forEach(d => {
-const dateStr = d.txDate.toLocaleDateString('ko-KR', {month:'short', day:'numeric'});
-const targetDateStr = d.nextPayoutDate.toLocaleDateString('ko-KR', {month:'short', day:'numeric'});
+const dateStr = d.txDate.toLocaleDateString('ko-KR', {month:'long', day:'numeric'});
+const targetDateStr = d.nextPayoutDate.toLocaleDateString('ko-KR', {month:'long', day:'numeric'});
 const row = document.createElement('div');
 row.className = "flex justify-between items-center text-[11px] bg-paper rounded-lg px-3 py-2";
 row.innerHTML = `
   <div>
     <span class="font-bold text-ink">${dateStr} · ${formatKRW(d.amount)} 입금</span>
-    <span class="block text-[10px] text-ink2/80">지급예정: ${targetDateStr} (${d.dDayStr})</span>
+    <span class="block text-[10px] text-ink2/80">지급예정: ${targetDateStr}</span>
   </div>
   <div class="text-right">
     <span class="font-bold text-mint">+${formatKRW(d.expectedCycleInterest)}</span>
@@ -662,8 +657,8 @@ loadData();
 window.openRateModal = function() {
 verifyPin(() => {
 const latest = getLatestRateConfig();
-document.getElementById('rate-value').value = latest.rate;
-document.getElementById('rate-period').value = latest.period;
+document.getElementById('rate-value').value = latest.rate || 5;
+document.getElementById('rate-period').value = latest.period || 'monthly';
 document.getElementById('rate-modal').classList.remove('hidden');
 });
 };
@@ -679,13 +674,6 @@ const rateType = document.getElementById('rate-type').value;
 
 if(isNaN(rateVal) || rateVal < 0) {
 alert('올바른 금리 수치를 입력해 주세요.');
-return;
-}
-
-const latest = getLatestRateConfig();
-if (latest.rate === rateVal && latest.period === ratePeriod && latest.type === rateType) {
-alert('변경된 금리 내용이 없습니다.');
-closeRateModal();
 return;
 }
 
@@ -814,13 +802,6 @@ renderAll();
 }
 }
 };
-
-setInterval(() => {
-if (isLoaded && appData.transactions && Object.keys(appData.transactions).length > 0) {
-const calculated = calculateInterest();
-document.getElementById('accumulated-interest').innerText = `+${formatKRW(calculated)}`;
-}
-}, 60000);
 
 </script>
 </body>
