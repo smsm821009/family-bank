@@ -80,7 +80,7 @@ transform: rotate(-7deg) scale(0.94);
 <!-- 메인 콘텐츠 영역 -->
 <main class="flex-1 px-5 -mt-6 space-y-5 pb-24">
 
-<!-- 입출금 버튼 섹션 -->
+<!-- 입출금 버튼 섹션 (PIN 검증 적용) -->
 <div class="grid grid-cols-2 gap-4">
 <button onclick="openModal('deposit')" class="btn-active bg-mint text-white py-4.5 rounded-2xl font-bold shadow-md flex flex-col items-center justify-center space-y-1">
 <i class="fa-solid fa-plus text-lg"></i>
@@ -395,7 +395,7 @@ const sorted = [...logs].sort((a,b) => new Date(b.timestamp) - new Date(a.timest
 return sorted[0];
 }
 
-// 🎯 매월 1일 잔액 총액 기반 이자 계산 (절사 없음)
+// 매월 1일 잔액 총액 기반 이자 계산 (절사 없음)
 function getMonthlyBalanceInterestInfo() {
 if (!isLoaded || !appData.transactions) return { basePrincipal: 0, interestAmt: 0, targetMonthKey: "", isPaid: false };
 
@@ -441,7 +441,7 @@ const isPaid = !!(appData.monthlyInterestPaid && appData.monthlyInterestPaid[mon
 return { basePrincipal, interestAmt, targetMonthKey: monthKey, isPaid };
 }
 
-// 🎯 통합 지급 대상 산출
+// 통합 지급 대상 산출
 function getInterestPayableItems() {
 if (!isLoaded || !appData.transactions) return { items: [], totalAmount: 0, includeMonthly: false };
 
@@ -703,7 +703,7 @@ if (!appData.pin || appData.pin.trim() === "") {
 onSuccess();
 return;
 }
-const input = prompt("설정된 보안 PIN 번호 4자리를 입력하세요:");
+const input = prompt("보안 PIN 번호 4자리를 입력하세요:");
 if (input === null) return;
 if (input === appData.pin) {
 onSuccess();
@@ -712,7 +712,9 @@ alert("❌ PIN 번호가 일치하지 않습니다.");
 }
 }
 
+// 🔑 [수정] 저금하기/출금하기 버튼 클릭 시 PIN 입력 필수 적용
 window.openModal = function(type) {
+verifyPin(() => {
 currentTxType = type;
 const modal = document.getElementById('transaction-modal');
 const title = document.getElementById('modal-title');
@@ -720,12 +722,14 @@ title.innerText = type === 'deposit' ? '🪙 새로운 저금하기' : '💸 계
 document.getElementById('modal-amount').value = '';
 document.getElementById('modal-memo').value = '';
 modal.classList.remove('hidden');
+});
 };
 
 window.closeModal = function() {
 document.getElementById('transaction-modal').classList.add('hidden');
 };
 
+// 🔑 입출금 최종 제출 시에도 PIN 확인 적용
 window.submitTransaction = function() {
 const rawAmt = document.getElementById('modal-amount').value;
 const memo = document.getElementById('modal-memo').value.trim();
@@ -733,6 +737,8 @@ if(!rawAmt || isNaN(rawAmt) || parseFloat(rawAmt) <= 0) {
 alert('유효한 금액을 입력해 주세요.');
 return;
 }
+
+verifyPin(() => {
 const processedAmount = currentTxType === 'deposit' ? Math.floor(parseFloat(rawAmt)) : -Math.floor(parseFloat(rawAmt));
 
 dbPush('familyBank/transactions', {
@@ -744,6 +750,7 @@ isInterestPaid: false
 closeModal();
 loadData();
 }).catch(err => alert("저장 실패: " + err.message));
+});
 };
 
 // 🧧 전체 지급 처리 (통합 이자 지급)
@@ -821,6 +828,7 @@ loadData();
 };
 
 window.openDetailModal = function(key) {
+verifyPin(() => {
 selectedTxKey = key;
 const tx = appData.transactions[key];
 document.getElementById('detail-amount').value = Math.abs(tx.amount);
@@ -832,6 +840,7 @@ const localISOTime = (new Date(lDate - offset)).toISOString().slice(0, 16);
 document.getElementById('detail-date').value = localISOTime;
 
 document.getElementById('detail-modal').classList.remove('hidden');
+});
 };
 
 window.closeDetailModal = function() {
