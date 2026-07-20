@@ -340,8 +340,7 @@ return fetch(`${DB_URL}/${path}.json`, { method: 'DELETE' })
 let appData = {
 transactions: {},
 rateLog: {},
-pin: "",
-lastInterestPayout: null
+pin: ""
 };
 
 let isLoaded = false;
@@ -361,12 +360,10 @@ if (data) {
 appData.transactions = data.transactions || {};
 appData.rateLog = data.rateLog || {};
 appData.pin = data.pin || "";
-appData.lastInterestPayout = data.lastInterestPayout || null;
 } else {
 appData.transactions = {};
 appData.rateLog = {};
 appData.pin = "";
-appData.lastInterestPayout = null;
 }
 isLoaded = true;
 renderAll();
@@ -395,9 +392,8 @@ const sorted = [...logs].sort((a,b) => new Date(b.timestamp) - new Date(a.timest
 return sorted[0];
 }
 
-// 🎯 핵심 정밀 이자 계산 로직
-// 1. 지급 예정일(입금일 + 주기)이 오늘 날짜보다 작거나 같을 때만 만기 이자로 산출
-// 2. 이미 이자를 수령한 적이 있으면(lastInterestPayout), 그 이후 지급예정일이 도래한 것만 합산
+// 🎯 완벽한 무결점 금융 회계 알고리즘
+// [총 지급되어야 할 만기 이자 누적액] - [이미 거래내역으로 지급받은 이자 총액]
 function calculateInterest() {
 if (!isLoaded || !appData.transactions) return 0;
 
@@ -411,28 +407,33 @@ if (periodType === 'weekly') cycleDays = 7;
 if (periodType === 'daily') cycleDays = 1;
 
 const now = new Date();
-const lastPayoutTime = appData.lastInterestPayout ? new Date(appData.lastInterestPayout).getTime() : 0;
-let totalInterest = 0;
-
 const txs = Object.values(appData.transactions);
+
+// 1. 지금까지 거래 내역을 통해 실제 수령한 총 이자 금액 계산
+const alreadyPaidTotal = txs
+.filter(tx => tx.memo === "🧧 정기 이자 지급 수령" && Number(tx.amount) > 0)
+.reduce((sum, tx) => sum + Number(tx.amount), 0);
+
+// 2. 현재 등록된 모든 입금건 중 '오늘 기준' 지급 예정일이 지난 총 발생 이자 계산
+let totalEarnedInterest = 0;
 
 txs.forEach(tx => {
 const numAmt = Number(tx.amount);
-// 정기 이자 수령 건 제외, 순수 입금(저금) 건만 대상
 if (!isNaN(numAmt) && numAmt > 0 && tx.memo !== "🧧 정기 이자 지급 수령") {
 const txDate = new Date(tx.timestamp);
 const payoutDate = new Date(txDate);
 payoutDate.setDate(payoutDate.getDate() + cycleDays);
 
-// 지급 예정일이 현재 시각보다 이전이거나 같고(만기 도래),
-// 마지막 이자 지급 시점 이후에 만기가 도래한 건만 합산
-if (now.getTime() >= payoutDate.getTime() && payoutDate.getTime() > lastPayoutTime) {
-totalInterest += Math.floor(numAmt * rateDecimal);
+// 만기일이 오늘 이하(도래함)라면 이자 발생 조건 충족
+if (now.getTime() >= payoutDate.getTime()) {
+totalEarnedInterest += Math.floor(numAmt * rateDecimal);
 }
 }
 });
 
-return totalInterest;
+// 3. 차액 산출 (음수 방지)
+const availableInterest = totalEarnedInterest - alreadyPaidTotal;
+return availableInterest > 0 ? availableInterest : 0;
 }
 
 function renderAll() {
@@ -624,7 +625,7 @@ loadData();
 }).catch(err => alert("저장 실패: " + err.message));
 };
 
-// 🧧 전체 지급 클릭 시: 이자 가산 후 지급 완료 타임스탬프(lastInterestPayout) 업데이트
+// 🧧 전체 지급 처리
 window.applyInterest = function() {
 const calculated = calculateInterest();
 if (calculated <= 0) {
@@ -639,9 +640,7 @@ amount: calculated,
 memo: "🧧 정기 이자 지급 수령",
 timestamp: now
 }).then(() => {
-return dbSet('familyBank/lastInterestPayout', now);
-}).then(() => {
-alert("이자가 성공적으로 계좌에 가산되었으며, 지급 가능 금액이 차감(초기화)되었습니다!");
+alert("이자가 성공적으로 계좌에 가산되었습니다!");
 loadData();
 }).catch(err => alert("이자 가산 실패: " + err.message));
 }
